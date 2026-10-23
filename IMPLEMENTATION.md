@@ -18,7 +18,7 @@
 - Use Homebrew Python 3.13.1, not the initially detected Designer Python 3.13.2: the latter could not load the PyAV native module.
 - PyAV 16.1.0 is pinned after reproducing an incompatibility with PyAV 19.
 - Base and Tiny model weights are cached locally, not committed. Base CPU recognition was tested; other hardware/models are qualified in TESTING.md.
-- Git source is committed locally. The first push to the supplied GitHub remote returned HTTP 403: the authenticated Alexwatson-de account has no write access. No alternative credentials or permission changes were attempted. An authorized account can push the local main branch.
+- Git source is published to https://github.com/DhruvBansalGit/ClipScribe on main. The initial permission error was resolved using an explicitly user-supplied credential for the push. The credential was supplied only to the Git subprocess environment, not saved to source, Git configuration or a credential helper. Remote main was verified against the local commit. Repository permissions were not changed.
 
 ## Privacy boundary
 Model installation is an explicit separate network-enabled action. Transcription loads only already-installed model directories, with offline model loading. No media, transcription text, credentials or analytics leave localhost. Uploaded/extracted media live in bounded temporary job directories and are removed on completion/failure/cancellation. Optional short retention is explicitly selected. Jobs and transcripts are in memory, not a database.

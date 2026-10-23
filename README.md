@@ -1,6 +1,6 @@
 # ClipScribe
 
-> **GitHub handoff pending:** the complete implementation is committed in this local repository. The first push to `DhruvBansalGit/ClipScribe` was rejected with HTTP 403 because the currently authenticated account (`Alexwatson-de`) lacks write permission. Use this workspace copy now; the clone instructions below apply after an authorized push. No credentials or repository permissions were changed. With an authorized Git account, run `git push -u origin main` from this folder.
+> **Source repository:** [DhruvBansalGit/ClipScribe](https://github.com/DhruvBansalGit/ClipScribe), branch `main`. Source is published on GitHub; the application itself runs on localhost. Model weights, uploaded media, local test artifacts and credentials are not included.
 
 **Turn Every Video Into Words.** A private, localhost video transcription workspace built with React, TypeScript, Vite, Tailwind CSS, Lucide, Motion, FastAPI, FFmpeg and **real faster-whisper inference**.
 
