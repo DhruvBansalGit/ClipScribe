@@ -1,0 +1,8 @@
+fastapi==0.135.2
+uvicorn==0.42.0
+faster-whisper==1.2.1
+# PyAV 19 removed metadata_errors used by faster-whisper 1.2.1.
+av==16.1.0
+python-multipart==0.0.22
+httpx==0.28.1
+pytest==9.0.2
