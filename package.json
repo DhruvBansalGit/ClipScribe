@@ -7,15 +7,21 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "predev": "node scripts/prepare-runtime.mjs",
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
+    "build": "node scripts/prepare-runtime.mjs && tsc --noEmit && vite build && node scripts/create-sw.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "test:browser": "playwright test",
     "test:production": "node tests/production-smoke.mjs",
+    "test:on-device": "node tests/on-device.mjs",
+    "stage:vercel": "node scripts/stage-vercel.mjs",
     "format:check": "prettier --check src tests/**/*.ts *.ts package.json index.html"
   },
   "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@huggingface/transformers": "^4.3.1",
     "lucide-react": "^0.468.0",
     "motion": "^12.0.0",
     "react": "^19.1.0",

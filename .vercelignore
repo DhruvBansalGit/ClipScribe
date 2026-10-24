@@ -1,0 +1,10 @@
+.git
+.venv
+.local
+backend
+tests
+test-results
+playwright-report
+node_modules
+.env*
+*.log

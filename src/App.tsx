@@ -32,6 +32,8 @@ import {
   PanelLeftClose,
 } from "lucide-react";
 import type { Config, Format, Job, Model, Segment, Settings } from "./types";
+import { BROWSER_MODE, isBrowserModel, LANGUAGES } from "./browser/registry";
+import { browserEngine } from "./browser/engine";
 import {
   activeSegment,
   clock,
@@ -40,12 +42,18 @@ import {
   loadSettings,
 } from "./transcript";
 
-const models: { id: Model; label: string; note: string }[] = [
+const allModels: { id: Model; label: string; note: string }[] = [
   { id: "tiny", label: "Tiny", note: "Light & fast" },
   { id: "base", label: "Base", note: "Everyday balance" },
   { id: "small", label: "Small", note: "More detail" },
   { id: "medium", label: "Medium", note: "More demanding" },
 ];
+const models = BROWSER_MODE
+  ? allModels.filter((m) => isBrowserModel(m.id))
+  : allModels;
+const settingsKey = BROWSER_MODE
+  ? "clipscribe.browser.settings"
+  : "clipscribe.settings";
 const stages = [
   "Preparing video",
   "Extracting audio",
@@ -80,7 +88,22 @@ async function responseJSON(response: Response) {
 }
 
 export default function App() {
-  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [settings, setSettings] = useState<Settings>(() => {
+    const saved = loadSettings(settingsKey);
+    return BROWSER_MODE
+      ? {
+          ...saved,
+          model: isBrowserModel(saved.model) ? saved.model : "base",
+          device: "cpu",
+          cleanup: "immediate",
+          language:
+            saved.language === "auto" || LANGUAGES.includes(saved.language)
+              ? saved.language
+              : "auto",
+        }
+      : saved;
+  });
+  const [downloadConsent, setDownloadConsent] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [offline, setOffline] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -123,9 +146,11 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const c = await responseJSON(
-        await fetch("/api/config", { signal: AbortSignal.timeout(7000) }),
-      );
+      const c = BROWSER_MODE
+        ? await browserEngine.config()
+        : await responseJSON(
+            await fetch("/api/config", { signal: AbortSignal.timeout(7000) }),
+          );
       setConfig(c);
       setOffline(false);
     } catch {
@@ -133,13 +158,19 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
+    if (!BROWSER_MODE) return;
+    if (import.meta.env.PROD && "serviceWorker" in navigator)
+      void navigator.serviceWorker.register("/sw.js").catch(() => {});
+    return browserEngine.subscribe(() => void refresh());
+  }, [refresh]);
+  useEffect(() => {
     void refresh();
     const id = setInterval(() => void refresh(), 5000);
     return () => clearInterval(id);
   }, [refresh]);
   useEffect(() => {
     try {
-      localStorage.setItem("clipscribe.settings", JSON.stringify(settings));
+      localStorage.setItem(settingsKey, JSON.stringify(settings));
     } catch {
       /* Memory-only settings still work. */
     }
@@ -159,6 +190,7 @@ export default function App() {
     return () => clearTimeout(id);
   }, [toast]);
   useEffect(() => {
+    if (BROWSER_MODE) return;
     if (!job || !["queued", "processing", "uploading"].includes(job.status))
       return;
     let cancelled = false;
@@ -259,7 +291,7 @@ export default function App() {
       )
     )
       return false;
-    if (job) {
+    if (job && !BROWSER_MODE) {
       try {
         await api(`/api/jobs/${job.id}`, "DELETE");
       } catch (e) {
@@ -326,13 +358,33 @@ export default function App() {
     setJob(null);
   }
   async function transcribe() {
-    if (!file || !config || busy || submitLock.current) return;
+    if (!file || !config || busy || installing || submitLock.current) return;
     if (modelState?.status !== "installed") {
       setSettingsOpen(true);
       return;
     }
     submitLock.current = true;
     setError("");
+    if (BROWSER_MODE) {
+      try {
+        await browserEngine.start(file, settings, (next) => {
+          setJob(next);
+          if (next.duration) setDuration(next.duration);
+          if (next.status === "completed" && next.result) {
+            setSegments(next.result.segments);
+            setToast("Transcript ready. Recognized entirely on this device.");
+          }
+          if (next.status === "failed")
+            setError(next.error || "Browser transcription failed.");
+        });
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        submitLock.current = false;
+        void refresh();
+      }
+      return;
+    }
     setUploading(true);
     setUploadPercent(null);
     const params = new URLSearchParams({
@@ -379,6 +431,10 @@ export default function App() {
     request.send(file); // Send the File directly; no base64 or full-file JS buffer.
   }
   async function cancel() {
+    if (BROWSER_MODE) {
+      browserEngine.cancel();
+      return;
+    }
     if (uploading) {
       xhr.current?.abort();
       return;
@@ -393,15 +449,26 @@ export default function App() {
     }
   }
   async function installModel() {
+    if (BROWSER_MODE && !downloadConsent) return;
     setInstalling(true);
     setError("");
     try {
-      await api(`/api/models/${settings.model}/install`);
+      if (BROWSER_MODE) await browserEngine.install(settings.model);
+      else await api(`/api/models/${settings.model}/install`);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setInstalling(false);
+    }
+  }
+  async function removeModel() {
+    try {
+      await browserEngine.remove(settings.model);
+      await refresh();
+      setToast("Model removed from this browser.");
+    } catch (e) {
+      setError((e as Error).message);
     }
   }
   async function copy(text: string) {
@@ -549,9 +616,13 @@ export default function App() {
             <span className={`connection ${offline ? "disconnected" : ""}`}>
               <span className="dot" />
               {offline
-                ? "Backend offline"
+                ? BROWSER_MODE
+                  ? "Browser unavailable"
+                  : "Backend offline"
                 : config
-                  ? "Local engine connected"
+                  ? BROWSER_MODE
+                    ? "On-device browser engine"
+                    : "Local engine connected"
                   : "Connecting to engine"}
             </span>
             <button
@@ -572,10 +643,15 @@ export default function App() {
             <div className="alert" role="status">
               <TriangleAlert size={18} />
               <div>
-                <strong>Start your local engine</strong>
+                <strong>
+                  {BROWSER_MODE
+                    ? "Browser storage unavailable"
+                    : "Start your local engine"}
+                </strong>
                 <p>
-                  Run FastAPI on 127.0.0.1:8001 using the README instructions.
-                  Your selected video stays here.
+                  {BROWSER_MODE
+                    ? "Open this site in a current desktop browser with site storage enabled. Private browsing or storage restrictions can prevent local model caching."
+                    : "Run FastAPI on 127.0.0.1:8001 using the README instructions. Your selected video stays here."}
                 </p>
               </div>
               <button className="text-button" onClick={() => void refresh()}>
@@ -587,9 +663,11 @@ export default function App() {
             <div className="alert" role="alert">
               <TriangleAlert size={18} />
               <span>
-                {!config.ffmpeg
-                  ? "FFmpeg or FFprobe is missing. Install FFmpeg, then restart the backend."
-                  : "Speech dependencies are missing. Install backend/requirements.txt in your Python environment."}
+                {BROWSER_MODE
+                  ? "This browser needs HTTPS, WebAssembly and enabled site storage. Try current desktop Chrome or Edge."
+                  : !config.ffmpeg
+                    ? "FFmpeg or FFprobe is missing. Install FFmpeg, then restart the backend."
+                    : "Speech dependencies are missing. Install backend/requirements.txt in your Python environment."}
               </span>
             </div>
           )}
@@ -646,7 +724,10 @@ export default function App() {
                 <div className="section-heading">
                   <h2>Start with a video</h2>
                   <span>
-                    01 <span className="muted">/ UPLOAD</span>
+                    01{" "}
+                    <span className="muted">
+                      / {BROWSER_MODE ? "SELECT LOCAL FILE" : "UPLOAD"}
+                    </span>
                   </span>
                 </div>
                 <div
@@ -713,6 +794,28 @@ export default function App() {
                     Ever.
                   </span>
                 </div>
+                {BROWSER_MODE && (
+                  <div className="device-notice">
+                    <Cpu size={20} />
+                    <div>
+                      <strong>
+                        Runs on your device. No installation wizard.
+                      </strong>
+                      <p>
+                        Download a model once to this browser, then transcribe
+                        locally. Model files are downloaded only after your
+                        consent; your video is never uploaded. Desktop Chrome or
+                        Edge is recommended.
+                      </p>
+                    </div>
+                    <button
+                      className="secondary"
+                      onClick={() => setSettingsOpen(true)}
+                    >
+                      Prepare this device <ArrowRight size={14} />
+                    </button>
+                  </div>
+                )}
                 <div className="feature-grid">
                   <article>
                     <span className="feature-icon purple">
@@ -724,7 +827,9 @@ export default function App() {
                       was spoken.
                     </p>
                     <span className="feature-meta">
-                      100 LANGUAGES SUPPORTED
+                      {BROWSER_MODE
+                        ? "99 MODEL LANGUAGE OPTIONS"
+                        : "100 LANGUAGES SUPPORTED"}
                     </span>
                   </article>
                   <article>
@@ -966,6 +1071,7 @@ export default function App() {
                               offline ||
                               !config.ffmpeg ||
                               !config.speech_dependencies ||
+                              installing ||
                               segments.length > 0
                             }
                             onClick={() => void transcribe()}
@@ -1013,12 +1119,23 @@ export default function App() {
                       </span>
                       <span className="small-label">
                         {job?.result
-                          ? languageName(job.result.language)
+                          ? job.result.language
+                            ? languageName(job.result.language)
+                            : "ORIGINAL LANGUAGE · AUTO"
                           : "YOUR WORDS, RIGHT HERE"}
                       </span>
                     </div>
                     {segments.length > 0 ? (
                       <>
+                        {segments.some(
+                          (s) => s.start === null || s.end === null,
+                        ) && (
+                          <p className="preview-note">
+                            Some timestamps were not returned. TXT and JSON
+                            preserve all text; subtitle exports require complete
+                            real timing.
+                          </p>
+                        )}
                         <div className="transcript-toolbar">
                           <label className="search">
                             <Search size={16} />
@@ -1082,9 +1199,11 @@ export default function App() {
                               >
                                 <button
                                   className="timestamp"
-                                  disabled={previewError}
+                                  disabled={previewError || s.start === null}
                                   aria-label={`Seek to ${clock(s.start)}`}
-                                  onClick={() => seek(s.start)}
+                                  onClick={() => {
+                                    if (s.start !== null) seek(s.start);
+                                  }}
                                 >
                                   <span className="segment-indicator" />
                                   {clock(s.start)}
@@ -1282,11 +1401,13 @@ export default function App() {
                 <div className="workspace-footer">
                   <ShieldCheck size={13} />
                   <span>
-                    {job?.media_deleted
-                      ? "Temporary backend media deleted. Your browser preview and transcript remain in this tab."
-                      : segments.length
-                        ? "Backend media retained for up to 15 minutes. New transcription deletes it now."
-                        : "Local files. Local model. No cloud transcription."}{" "}
+                    {BROWSER_MODE
+                      ? "Video and audio stay on this device. Processing buffers are released after completion or cancellation."
+                      : job?.media_deleted
+                        ? "Temporary backend media deleted. Your browser preview and transcript remain in this tab."
+                        : segments.length
+                          ? "Backend media retained for up to 15 minutes. New transcription deletes it now."
+                          : "Local files. Local model. No cloud transcription."}{" "}
                     {segments.length > 0 &&
                       "Download before leaving; edits are not saved to disk."}
                   </span>
@@ -1296,7 +1417,18 @@ export default function App() {
           </AnimatePresence>
         </main>
         <footer className="page-footer">
-          <span>Made for your words. Built for your privacy.</span>
+          <span>
+            Made for your words. Built for your privacy.{" "}
+            {BROWSER_MODE && (
+              <a
+                href="/THIRD_PARTY_NOTICES.txt"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Licenses &amp; source
+              </a>
+            )}
+          </span>
           <span>
             <span className="dot" /> NO API KEYS. NO SUBSCRIPTIONS.
           </span>
@@ -1365,10 +1497,9 @@ export default function App() {
                 <div>
                   <h3>Install once. Transcribe locally.</h3>
                   <p>
-                    Start FastAPI and Vite as described in the README. In
-                    Settings, install a Whisper model. Only this installation
-                    contacts the model host. Cached models work without an
-                    internet connection.
+                    {BROWSER_MODE
+                      ? "In Settings, consent to downloading a Tiny or Base ONNX Whisper model. The weights are stored in this browser on your computer, not installed as a Python application. No account, API key or local server is needed. A browser may evict stored files; a new browser or private session may need another download."
+                      : "Start FastAPI and Vite as described in the README. In Settings, install a Whisper model. Only this installation contacts the model host. Cached models work without an internet connection."}
                   </p>
                 </div>
               </article>
@@ -1386,21 +1517,41 @@ export default function App() {
               <div className="guidance">
                 <ShieldCheck size={18} />
                 <p>
-                  No accounts, paid APIs, cloud storage or analytics. Backend
-                  media is deleted after processing by default; results expire
-                  after one hour. Keep the servers bound to localhost.
+                  {BROWSER_MODE
+                    ? "Selected files and transcripts are never uploaded to Vercel or the model host. Vercel serves the website; Hugging Face serves public model weights after consent. Processing buffers are released after each job. Only models and app assets are cached; download your transcript before closing the tab."
+                    : "No accounts, paid APIs, cloud storage or analytics. Backend media is deleted after processing by default; results expire after one hour. Keep the servers bound to localhost."}
                 </p>
               </div>
             </div>
           ) : (
             <div className="settings-fields">
+              {BROWSER_MODE && (
+                <div className="guidance">
+                  <Cpu size={18} />
+                  <p>
+                    <strong>In this browser · ONNX Whisper</strong>
+                    <br />
+                    Tiny and Base run on your computer using WebAssembly. No
+                    Python server is required. Browser limit: 100 MB and 10
+                    minutes. Use the{" "}
+                    <a
+                      href="https://github.com/DhruvBansalGit/ClipScribe"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Python localhost version
+                    </a>{" "}
+                    for larger files/models.
+                  </p>
+                </div>
+              )}
               <label className="field-label">LOCAL WHISPER MODEL</label>
               <div className="model-choices">
                 {models.map((m) => (
                   <button
                     key={m.id}
                     className={settings.model === m.id ? "chosen" : ""}
-                    disabled={busy}
+                    disabled={busy || installing}
                     onClick={() => preference("model", m.id)}
                   >
                     <span>
@@ -1419,7 +1570,9 @@ export default function App() {
                     {settings.model.toUpperCase()}{" "}
                     <strong>
                       {modelState?.status === "installed"
-                        ? "Installed locally"
+                        ? BROWSER_MODE
+                          ? "Cached in this browser"
+                          : "Installed locally"
                         : modelState?.status === "downloading"
                           ? "Downloading weights…"
                           : modelState?.status === "failed"
@@ -1434,6 +1587,7 @@ export default function App() {
                     disabled={
                       busy ||
                       installing ||
+                      (BROWSER_MODE && !downloadConsent) ||
                       offline ||
                       !config ||
                       Object.values(config.models).some(
@@ -1449,20 +1603,65 @@ export default function App() {
                     )}{" "}
                     {modelState?.status === "failed"
                       ? "Retry"
-                      : "Install model"}
+                      : BROWSER_MODE
+                        ? "Download to this device"
+                        : "Install model"}
                   </button>
                 )}
               </div>
+              {BROWSER_MODE && modelState?.status !== "installed" && (
+                <label className="download-consent">
+                  <input
+                    type="checkbox"
+                    checked={downloadConsent}
+                    disabled={installing}
+                    onChange={(e) => setDownloadConsent(e.target.checked)}
+                  />
+                  <span>
+                    I agree to download public model and runtime files to this
+                    browser. This uses internet data and local storage; no video
+                    will be sent.
+                  </span>
+                </label>
+              )}
+              {BROWSER_MODE && modelState?.status === "downloading" && (
+                <div className="download-details" role="status">
+                  <span>{modelState.file || "Preparing model…"}</span>
+                  {modelState.loaded !== undefined && (
+                    <span>
+                      {bytes(modelState.loaded)}
+                      {modelState.total
+                        ? ` / ${bytes(modelState.total)}`
+                        : ""}{" "}
+                      · current file
+                    </span>
+                  )}
+                  <button
+                    className="text-button"
+                    onClick={() => browserEngine.cancelInstall()}
+                  >
+                    Cancel download
+                  </button>
+                </div>
+              )}
+              {BROWSER_MODE && !installing && (
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => void removeModel()}
+                >
+                  Remove {settings.model} from this browser
+                </button>
+              )}
               {modelState?.error && (
                 <p className="inline-error" role="alert">
                   {modelState.error}
                 </p>
               )}
               <p className="hint">
-                Installation downloads model weights from Hugging Face and needs
-                internet. No video is sent. After installation, transcription
-                uses local files only. Larger models require more disk space,
-                memory and time.
+                {BROWSER_MODE
+                  ? "Model weights come from Hugging Face; runtime files come from this website. Expect substantial downloads and memory use, especially with Base. No media is sent. Models are cached per browser/site and can be evicted by your browser. The same open app can work offline after preparation; a fresh device needs internet first."
+                  : "Installation downloads model weights from Hugging Face and needs internet. No video is sent. After installation, transcription uses local files only. Larger models require more disk space, memory and time."}
               </p>
               <div className="settings-pair">
                 <label>
@@ -1489,43 +1688,56 @@ export default function App() {
                       preference("device", e.target.value as Settings["device"])
                     }
                   >
-                    <option value="cpu">CPU · compatible default</option>
-                    <option value="cuda" disabled={!config?.cuda}>
-                      NVIDIA CUDA{!config?.cuda ? " · unavailable" : ""}
+                    <option value="cpu">
+                      {BROWSER_MODE
+                        ? "Browser CPU · WebAssembly"
+                        : "CPU · compatible default"}
                     </option>
+                    {!BROWSER_MODE && (
+                      <option value="cuda" disabled={!config?.cuda}>
+                        NVIDIA CUDA{!config?.cuda ? " · unavailable" : ""}
+                      </option>
+                    )}
                   </select>
                 </label>
               </div>
               <div className="guidance">
                 <Cpu size={18} />
                 <p>
-                  Start with Base on CPU. Try Tiny for less memory and faster
-                  results. CUDA requires a supported NVIDIA GPU plus compatible
-                  CUDA/cuDNN libraries. Apple Metal is not supported.
+                  {BROWSER_MODE
+                    ? "Tiny is the lightest choice. Base can improve recognition but needs more memory and time. Keep this tab open while processing. Limited-memory phones may not support these models reliably. Recognition is not perfect; review your transcript."
+                    : "Start with Base on CPU. Try Tiny for less memory and faster results. CUDA requires a supported NVIDIA GPU plus compatible CUDA/cuDNN libraries. Apple Metal is not supported."}
                 </p>
               </div>
-              <label className="settings-label">
-                Temporary media cleanup
-                <select
-                  disabled={busy}
-                  value={settings.cleanup}
-                  onChange={(e) =>
-                    preference("cleanup", e.target.value as Settings["cleanup"])
-                  }
-                >
-                  <option value="immediate">
-                    Immediately after processing (recommended)
-                  </option>
-                  <option value="15min">
-                    Keep for up to 15 minutes after success
-                  </option>
-                </select>
-              </label>
-              <p className="hint">
-                Failures and cancellations always delete media. Restarting the
-                backend clears stale media. In-memory job results expire after
-                one hour.
-              </p>
+              {!BROWSER_MODE && (
+                <>
+                  <label className="settings-label">
+                    Temporary media cleanup
+                    <select
+                      disabled={busy}
+                      value={settings.cleanup}
+                      onChange={(e) =>
+                        preference(
+                          "cleanup",
+                          e.target.value as Settings["cleanup"],
+                        )
+                      }
+                    >
+                      <option value="immediate">
+                        Immediately after processing (recommended)
+                      </option>
+                      <option value="15min">
+                        Keep for up to 15 minutes after success
+                      </option>
+                    </select>
+                  </label>
+                  <p className="hint">
+                    Failures and cancellations always delete media. Restarting
+                    the backend clears stale media. In-memory job results expire
+                    after one hour.
+                  </p>
+                </>
+              )}
               <label className="settings-label">
                 Default export
                 <select

@@ -11,6 +11,17 @@ const segments = [
   { id: 1, start: 5.001, end: 8.21, text: "An edited sentence." },
 ];
 describe("actual timestamp-based transcript operations", () => {
+  it("never invents missing model timestamps", () => {
+    const unknown = [
+      { id: 0, start: 0, end: null, text: "Real recognized words" },
+    ];
+    expect(activeSegment(unknown, 1)).toBeNull();
+    expect(clock(null)).toBe("--:--");
+    expect(exportText("txt", unknown)).toBe("Real recognized words");
+    expect(JSON.parse(exportText("json", unknown)).segments[0].end).toBeNull();
+    expect(() => exportText("srt", unknown)).toThrow(/not be invented/);
+    expect(() => exportText("vtt", unknown)).toThrow(/not be invented/);
+  });
   it("omits empty subtitle cues without changing timestamps", () => {
     expect(
       exportText("srt", [{ ...segments[0], text: "" }, segments[1]]),

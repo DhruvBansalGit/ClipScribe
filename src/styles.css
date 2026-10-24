@@ -2140,3 +2140,92 @@ main {
     scroll-behavior: auto !important;
   }
 }
+
+/* Hosted browser mode: explicit consent and accurate local-storage guidance. */
+.device-notice {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 18px;
+  margin: 0 0 26px;
+  border: 1px solid #35402b;
+  border-radius: 9px;
+  background: #192015;
+  color: #bdd49e;
+}
+.device-notice > svg {
+  flex-shrink: 0;
+}
+.device-notice > div {
+  flex: 1;
+}
+.device-notice strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.device-notice p {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #a3ae99;
+  margin-top: 6px;
+}
+.device-notice .secondary {
+  font-size: 10px;
+}
+.download-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid #3a4530;
+  border-radius: 7px;
+  background: #1b2218;
+  margin: 14px 0;
+  color: #c2d0b3;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.download-consent input {
+  accent-color: var(--accent);
+  margin-top: 4px;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+}
+.download-details {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 11px;
+  color: #c2dca3;
+  padding: 12px 0;
+  overflow-wrap: anywhere;
+}
+.download-details .text-button {
+  align-self: flex-start;
+}
+.guidance a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  color: #d7f995;
+}
+.guidance strong {
+  color: #d8e5c8;
+  font-weight: 550;
+}
+@media (max-width: 620px) {
+  .device-notice {
+    flex-wrap: wrap;
+    padding: 15px;
+    gap: 11px;
+  }
+  .device-notice > div {
+    min-width: 75%;
+  }
+  .device-notice .secondary {
+    margin-left: 30px;
+  }
+  .device-notice p {
+    font-size: 10px;
+  }
+}

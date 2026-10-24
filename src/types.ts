@@ -1,6 +1,11 @@
 export type Model = "tiny" | "base" | "small" | "medium";
 export type Format = "txt" | "srt" | "vtt" | "json";
-export type Segment = { id: number; start: number; end: number; text: string };
+export type Segment = {
+  id: number;
+  start: number | null;
+  end: number | null;
+  text: string;
+};
 export type Settings = {
   model: Model;
   language: string;
@@ -17,12 +22,21 @@ export type Config = {
   cuda: boolean;
   languages: string[];
   extensions: string[];
-  models: Record<Model, { status: string; error?: string }>;
+  models: Record<
+    Model,
+    {
+      status: string;
+      error?: string;
+      file?: string;
+      loaded?: number;
+      total?: number;
+    }
+  >;
 };
 export type Result = {
   segments: Segment[];
-  language: string;
-  language_probability: number;
+  language: string | null;
+  language_probability: number | null;
   duration: number;
   model: Model;
   text: string;

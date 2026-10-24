@@ -22,3 +22,12 @@
 
 ## Privacy boundary
 Model installation is an explicit separate network-enabled action. Transcription loads only already-installed model directories, with offline model loading. No media, transcription text, credentials or analytics leave localhost. Uploaded/extracted media live in bounded temporary job directories and are removed on completion/failure/cancellation. Optional short retention is explicitly selected. Jobs and transcripts are in memory, not a database.
+
+## Hosted browser mode (requested follow-up)
+- Public site: https://clipscribe-flax.vercel.app. Only static assets are sent to Vercel using scripts/stage-vercel.mjs. The Python backend remains local and is not deployed.
+- User explicitly confirmed personal/non-commercial Hobby use; no billing/plan changes.
+- Transformers.js 4.3.1, pinned Xenova Tiny/Base ONNX revisions, CPU Q8 WebAssembly, self-hosted FFmpeg/ONNX runtimes, browser Cache Storage and app-shell service worker.
+- Explicit download consent, actual per-file byte progress, cache completion/eviction checks and model removal. Models are stored in browser-managed site storage, not installed system-wide.
+- Read-only WORKERFS mounts selected video; workers extract/transcribe locally. Browser limit 100 MiB / 600 seconds. Cancellation terminates workers, with no uploaded or persisted user media.
+- Hosted Tiny and Base passed real human-speech recognition, edited exports, playback synchronization, cache reuse, offline reload/inference, cancellation and corrupt-media checks. Base removal was verified. See TESTING.md.
+- CLI deployment only; GitHub source publishing does not automatically trigger Vercel. Runtime notices and upstream source are exposed through the footer.

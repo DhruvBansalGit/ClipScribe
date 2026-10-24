@@ -6,9 +6,9 @@ export const defaults: Settings = {
   cleanup: "immediate",
   format: "txt",
 };
-export function loadSettings(): Settings {
+export function loadSettings(key = "clipscribe.settings"): Settings {
   try {
-    const s = JSON.parse(localStorage.getItem("clipscribe.settings") || "{}");
+    const s = JSON.parse(localStorage.getItem(key) || "{}");
     return {
       model: ["tiny", "base", "small", "medium"].includes(s.model)
         ? s.model
@@ -24,7 +24,8 @@ export function loadSettings(): Settings {
     return defaults;
   }
 }
-export function clock(seconds: number) {
+export function clock(seconds: number | null) {
+  if (seconds === null) return "--:--";
   if (!Number.isFinite(seconds)) return "0:00";
   const n = Math.max(0, Math.floor(seconds));
   return n >= 3600
@@ -41,7 +42,12 @@ export function fullText(segments: Segment[]) {
   return segments.map((s) => s.text.trim()).join("\n");
 }
 export function activeSegment(segments: Segment[], time: number) {
-  return segments.find((s) => time >= s.start && time < s.end)?.id ?? null;
+  return (
+    segments.find(
+      (s) =>
+        s.start !== null && s.end !== null && time >= s.start && time < s.end,
+    )?.id ?? null
+  );
 }
 export function exportText(
   format: Format,
@@ -64,6 +70,10 @@ export function exportText(
     );
   const cues = nonempty
     .map((s, i) => {
+      if (s.start === null || s.end === null)
+        throw new Error(
+          "Some segment timestamps were not returned by the model. Export TXT or JSON; subtitle times will not be invented.",
+        );
       if (s.start < previous || s.end <= s.start)
         throw new Error(
           "Subtitle timing is invalid. Export JSON to preserve your work.",

@@ -1,12 +1,67 @@
 # ClipScribe
 
-> **Source repository:** [DhruvBansalGit/ClipScribe](https://github.com/DhruvBansalGit/ClipScribe), branch `main`. Source is published on GitHub; the application itself runs on localhost. Model weights, uploaded media, local test artifacts and credentials are not included.
+> **Live website:** [clipscribe-flax.vercel.app](https://clipscribe-flax.vercel.app) · **Source:** [DhruvBansalGit/ClipScribe](https://github.com/DhruvBansalGit/ClipScribe), branch `main`. Vercel hosts static website/runtime files only. Visitors run speech recognition on their own device. The original Python localhost app is also preserved.
 
-**Turn Every Video Into Words.** A private, localhost video transcription workspace built with React, TypeScript, Vite, Tailwind CSS, Lucide, Motion, FastAPI, FFmpeg and **real faster-whisper inference**.
+**Turn Every Video Into Words.** A private video transcription workspace with two real local inference engines: **ONNX Whisper in the browser** for the hosted website, and **FastAPI + faster-whisper** for the Python localhost application. Shared React, TypeScript, Vite, Tailwind, Lucide and Motion editor.
 
-No paid transcription API, cloud credentials, accounts, database, Firebase, Supabase, analytics, remote fonts or cloud media storage. Model installation needs internet; **transcription uses installed local model files only**. This is a local application, not a hosted service.
+No paid transcription API, cloud credentials, accounts, database, Firebase, Supabase, analytics, remote fonts or cloud media storage. Model preparation needs internet; **recognition runs locally with cached model files**. Model weights, selected media, local test artifacts and credentials are not committed or uploaded to Vercel.
 
-## What works
+## Use the hosted website — no Python required
+
+1. Open **https://clipscribe-flax.vercel.app** in a current desktop Chrome or Edge browser.
+2. Open **Prepare this device** / **Settings**. Choose Tiny (lightest) or Base (default).
+3. Check the download-consent box and click **Download to this device**. Public ONNX model files come from Hugging Face; audio/inference runtime files come from this website. The first preparation needs internet and available disk space/memory. There is no media upload.
+4. Wait for **Cached in this browser**, select your local video and click **Transcribe video**.
+5. Review/edit, click timestamps, and download TXT/SRT/VTT/JSON. Download before closing the tab.
+
+### What “download to your PC” means
+
+The model is saved in this website's **browser Cache Storage** on the visitor's device, not in their Downloads folder or as a system Python installation. Browsers cannot silently install desktop software. Model download requires explicit consent. Future visits to the same browser/profile/site reuse the cached model. Clearing site data, private browsing, switching browsers/domains or browser storage eviction may require downloading again. **Remove Tiny/Base from this browser** deletes that model's cached weights.
+
+Vercel serves the page and JavaScript/WASM runtime. Hugging Face and its CDN receive ordinary public model-download requests (and usual IP/request metadata) only during installation. Neither receives the selected video, audio, transcript or filename. FFmpeg WASM mounts the chosen File with read-only WORKERFS slices and extracts 16 kHz mono audio locally; a separate worker runs quantized Whisper through ONNX Runtime Web. Cancelling terminates workers and releases processing buffers. Videos/audio/transcripts are never persisted in Cache Storage or localStorage.
+
+Hosted limits: **100 MiB per video, 10 minutes, one job at a time**. Tiny and Base use CPU WebAssembly Q8. Small/Medium/CUDA are intentionally not exposed in hosted mode; use the native app below for those. These pinned multilingual model revisions contain 99 language codes. Automatic language detection is used internally, but this browser pipeline does not expose a reliable detected-language label/probability; the UI says original language/auto rather than inventing one. Missing timestamps are kept as null in JSON and block subtitle export; TXT remains available.
+
+On-device Tiny **and Base** were tested with real human speech at the public URL. Prepared app-shell reload and fresh-worker recognition passed with browser networking disabled. This does not make a fresh visitor offline-ready: dependencies/model assets must finish downloading first. Storage eviction, browser updates and new site releases can require connectivity. Low-memory phones may fail even with Tiny; desktop Chrome/Edge is recommended. Other browsers and long recordings remain unverified. Model accuracy is not guaranteed.
+
+### Develop/test browser mode locally
+
+```sh
+npm ci
+npm run dev
+```
+
+Open **http://127.0.0.1:5175/?engine=browser**. No FastAPI process is needed for this mode. Without the query flag, localhost retains the original Python-backed behavior. Production preview: `npm run build`, `npm run preview`, then **http://127.0.0.1:4175/?engine=browser**. Public hostnames automatically select browser mode and never call `/api`.
+
+### Static-only Vercel deployment
+
+The owner explicitly confirmed personal/non-commercial use on the existing Vercel Hobby account. No plan upgrades, billing changes, serverless inference, cloud database or media storage were enabled. Hobby quotas/terms still apply. Public production access was verified without authentication; preview deployments may retain Vercel protection.
+
+The CLI's multi-service autodetection sees the preserved Python backend in the repository. To ensure **only tested static assets** are deployed, use the provided staging script:
+
+```sh
+npm ci
+npm run build
+npm run stage:vercel
+vercel link --yes --project clipscribe --scope dhruv-820e --cwd .local/vercel-static
+# Link may create a local CLI env file. Restage to remove it and exclude .env*.
+npm run stage:vercel
+vercel deploy --prod --yes --scope dhruv-820e --cwd .local/vercel-static
+```
+
+Use your own authorized Vercel scope/project when forking. Deployment is currently CLI-driven, **not automatic GitHub push deployment**. Do not deploy the Python backend to Vercel or add cloud transcription. `vercel.json` supplies security headers; the staging script sets the deploy target to static output. The generated service worker caches app assets, never API responses or user media. Model revisions and JS dependencies are pinned by registry/lockfile. See [third-party licenses and upstream source](public/THIRD_PARTY_NOTICES.txt).
+
+Run the real on-device suite after preparing the real speech fixture described below:
+
+```sh
+npm run test:on-device
+CLIPSCRIBE_BROWSER_URL=https://clipscribe-flax.vercel.app npm run test:on-device
+CLIPSCRIBE_BROWSER_URL=https://clipscribe-flax.vercel.app CLIPSCRIBE_BROWSER_MODEL=base CLIPSCRIBE_REMOVE_MODEL=1 npm run test:on-device
+```
+
+The test profile stays in ignored `.local/on-device-profile`. The hosted tests check genuine recognition, no media uploads, real exported subtitle parsing, cache persistence, offline reload/inference, cancellation and corrupt media. `CLIPSCRIBE_EPHEMERAL=1` selects a fresh ephemeral browser for first-visit testing.
+
+## Original Python localhost mode — what works
 
 - Drag/drop or select one video: MP4, MOV, WebM, MKV, AVI, M4V, MPEG, TS/MTS/M2TS, 3GP, OGV, WMV and FLV, subject to installed FFmpeg codecs.
 - Object-URL browser preview, native play/pause/seek/volume/fullscreen controls, current time, duration and speed selection. The file is not converted to base64 or read into one JavaScript buffer.

@@ -1,6 +1,28 @@
-# Verification report — 2026-10-23
+# Verification report — native 2026-10-23 / hosted browser 2026-10-24
 
-## Verified with real speech recognition
+## Hosted browser mode — verified on the real public Vercel URL
+
+Public site: **https://clipscribe-flax.vercel.app**. Static-only deployment to the existing Hobby account after explicit owner confirmation of personal/non-commercial use. No billing or plan changes. Unauthenticated HTTP/browser access to the production alias succeeded; preview protection remains a separate Vercel setting.
+
+Actual Transformers.js 4.3.1 / ONNX Runtime Web / Q8 WASM inference succeeded for **both multilingual Tiny and Base** using the real 11-second JFK video. No Python backend or inference API was involved. Both produced recognizable speech including “ask not what your country can do for you, ask what you can do for your country.” ONNX segment boundaries differ from native faster-whisper; timestamps come from the model, not from the native fixture result. Auto-detected language/probability is not reported by the browser pipeline and is intentionally null rather than fabricated.
+
+Hosted on-device suite:
+- Tiny: **9 checks passed**, including cache reuse across separate browser launches.
+- Base: **10 checks passed**, including first-download consent and remove-model verification.
+- Tests cover real model installation, fresh-worker recognition, no local API calls/media upload bodies, no external downloads during inference, text editing/search/copy, playback synchronization, TXT/SRT/VTT/JSON exports, FFprobe parsing of actual exported subtitles, 390 px layout, offline page reload plus actual inference with browser networking disabled, worker cancellation, and corrupt-video rejection.
+- The same checks ran on the actual public hostname without Vercel credentials or bypass headers. Cached models are specific to that origin/browser; localhost/native cache files were not used for the hosted result.
+- Final no-timestamp unit coverage preserves null timestamps and refuses to manufacture SRT/VTT cue times. Frontend unit count is now **12**; the native regression suites remain 18 backend tests and 3 browser workflows.
+
+Implementation issues caught and repaired:
+- Runtime cache streaming failures under local disk pressure: buffer known bounded public assets before writing, report local-storage failure, and keep service-worker cache errors from breaking valid network responses.
+- FFprobe WASM reports -1 after successful cleanup; accept it only with complete parseable stream/duration metadata. Corrupt input remains rejected.
+- Transformers.js metadata probes default to main even when a pinned revision is requested. Explicit components and a narrowly scoped cache alias keep cached inference offline.
+- Hosted CSP initially blocked local blob-WASM reads. Added `blob:` to connect-src and versioned the FFmpeg worker to invalidate stale cached security headers. Model-host allowlisting remains narrow; arbitrary remote uploads are not permitted by application code.
+- Preserved the original backend but staged only built static assets for Vercel, avoiding multi-service autodetection and any Python/cloud inference deployment.
+
+Browser limitations: no GPU/WebGPU path is exposed; current desktop Chromium tested, other browsers/OSes and mobile inference not verified. The 100 MiB / 10-minute bounds are product safeguards, not a promise every limited-memory device can process those maxima. Full 10-minute quality/performance was not benchmarked. Model-host outages, cache eviction and storage limitations can require retry/reinstallation. First use requires internet. Only app/model files are cached; transcripts remain tab-local. See [README.md](README.md) for exact hosted and native instructions.
+
+## Original Python localhost mode — verified with real speech recognition
 
 Environment: macOS Apple Silicon, Homebrew Python 3.13.1, Node 24.13.0, npm 11.6.2, local FFmpeg/FFprobe, faster-whisper 1.2.1 + PyAV 16.1.0, **Base / CPU / INT8**.
 
