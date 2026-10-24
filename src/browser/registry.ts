@@ -12,14 +12,23 @@ export const BROWSER_MODELS = {
     repo: "Xenova/whisper-base",
     revision: "64da57285918e20ea79ea5c88eed7197933abaa8",
   },
+  small: {
+    repo: "Xenova/whisper-small",
+    revision: "2d67713f236afa48a18992566e7647f6ca848e13",
+  },
+  medium: {
+    repo: "Xenova/whisper-medium",
+    revision: "8c5b90880ab9f79487ab33613413431bf661d595",
+  },
 } as const;
 export type BrowserModel = keyof typeof BROWSER_MODELS;
 export const MODEL_CACHE_PREFIX = "clipscribe-onnx-v1-";
 export const MEDIA_CACHE = "clipscribe-media-v1";
-export const MAX_BROWSER_BYTES = 100 * 1024 * 1024;
-export const MAX_BROWSER_SECONDS = 600;
+// No application-level file size or recording duration ceiling. Only the
+// currently processed PCM window is bounded; browser/hardware limits remain.
+export const AUDIO_WINDOW_SECONDS = 30;
 export const RUNTIME_ROOT = "/runtime/browser-v1";
-// Exact codes present in the two pinned generation_config.json files.
+// Language codes from the pinned multilingual generation_config.json files.
 export const LANGUAGES =
   "af am ar as az ba be bg bn bo br bs ca cs cy da de el en es et eu fa fi fo fr gl gu haw ha he hi hr ht hu hy id is it ja jw ka kk km kn ko la lb ln lo lt lv mg mi mk ml mn mr ms mt my ne nl nn no oc pa pl ps pt ro ru sa sd si sk sl sn so sq sr su sv sw ta te tg th tk tl tr tt uk ur uz vi yi yo zh".split(
     " ",
@@ -42,5 +51,5 @@ export const EXTENSIONS = [
   "flv",
 ];
 export function isBrowserModel(value: string): value is BrowserModel {
-  return value === "tiny" || value === "base";
+  return Object.prototype.hasOwnProperty.call(BROWSER_MODELS, value);
 }

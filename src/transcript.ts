@@ -54,7 +54,18 @@ export function exportText(
   segments: Segment[],
   result?: Result,
 ) {
-  if (format === "txt") return fullText(segments);
+  // TXT downloads include source-video time ranges; clipboard stays text-only.
+  // Missing model timestamps remain explicitly unknown, never fabricated.
+  if (format === "txt")
+    return (
+      segments
+        .map((s) => {
+          const start = s.start === null ? "unknown" : stamp(s.start, ".");
+          const end = s.end === null ? "unknown" : stamp(s.end, ".");
+          return `[${start} --> ${end}] ${s.text.trim()}`;
+        })
+        .join("\n\n") + "\n"
+    );
   if (format === "json")
     return JSON.stringify(
       { ...result, segments, text: fullText(segments) },

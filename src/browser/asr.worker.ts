@@ -5,6 +5,9 @@ import {
   WhisperForConditionalGeneration,
   AutoTokenizer,
   AutoProcessor,
+  LogitsProcessor,
+  LogitsProcessorList,
+  Tensor,
 } from "@huggingface/transformers";
 import {
   BROWSER_MODELS,
@@ -12,9 +15,70 @@ import {
   RUNTIME_ROOT,
   isBrowserModel,
   type BrowserModel,
+  AUDIO_WINDOW_SECONDS,
 } from "./registry";
 import { markInstalled, modelInstalled } from "./cache";
 import type { Result, Segment } from "../types";
+import { speechRanges, bestLanguage, SAMPLE_RATE } from "./audio-windows";
+
+class LanguageScores extends LogitsProcessor {
+  detected: { language: string; probability: number } | null = null;
+  constructor(private languages: Record<string, number>) {
+    super();
+  }
+  _call(_ids: bigint[][], logits: Tensor) {
+    const scores = logits.data as Float32Array;
+    this.detected = bestLanguage(scores, this.languages);
+    const allowed = new Set(Object.values(this.languages));
+    for (let i = 0; i < scores.length; i++)
+      if (!allowed.has(i)) scores[i] = -Infinity;
+    return logits;
+  }
+}
+async function detectLanguage(
+  asr: AutomaticSpeechRecognitionPipeline,
+  audio: Float32Array,
+) {
+  const generation = asr.model.generation_config as unknown as {
+    lang_to_id: Record<string, number>;
+    decoder_start_token_id: number;
+  };
+  if (
+    !generation?.lang_to_id ||
+    !Number.isFinite(generation.decoder_start_token_id)
+  )
+    throw new Error(
+      "Language-token mapping is unavailable. Select a known language.",
+    );
+  const features = await asr.processor(audio);
+  const filter = new LanguageScores(generation.lang_to_id);
+  const processors = new LogitsProcessorList();
+  processors.push(filter);
+  try {
+    // First decoder token after SOT predicts language. Suppress non-language
+    // tokens, not the language tokens; never invoke the library's English fallback.
+    const token = await asr.model.generate({
+      inputs: features.input_features,
+      decoder_input_ids: [generation.decoder_start_token_id],
+      max_new_tokens: 1,
+      return_timestamps: false,
+      return_dict_in_generate: false,
+      suppress_tokens: [],
+      begin_suppress_tokens: [],
+      do_sample: false,
+      num_beams: 1,
+      logits_processor: processors,
+    });
+    if (token instanceof Tensor) token.dispose();
+    if (!filter.detected)
+      throw new Error(
+        "Language detection returned no scores. Choose a known language.",
+      );
+    return filter.detected;
+  } finally {
+    features.input_features.dispose();
+  }
+}
 
 let installing = false;
 let recognizer: AutomaticSpeechRecognitionPipeline | null = null;
@@ -121,6 +185,9 @@ async function load(model: BrowserModel, id: string, download: boolean) {
     revision: spec.revision,
     device: "wasm" as const,
     dtype: "q8" as const,
+    // Avoid retaining arena/pattern allocations across encoder/decoder calls,
+    // especially for Medium on memory-constrained devices. Hardware limits remain.
+    session_options: { enableCpuMemArena: false, enableMemPattern: false },
     local_files_only: !download,
     progress_callback: (event: {
       status: string;
@@ -169,55 +236,75 @@ self.onmessage = async (event: MessageEvent) => {
   handling = true;
   try {
     if (!isBrowserModel(model))
-      throw new Error(
-        "Browser mode supports Tiny and Base. Use the Python localhost app for larger models.",
-      );
+      throw new Error("Choose Tiny, Base, Small or Medium.");
     if (kind === "install") {
       await load(model, id, true);
       send(id, { kind: "installed" });
     } else if (kind === "transcribe") {
       send(id, { kind: "stage", stage: "Loading transcription model" });
-      const asr = await load(model, id, false);
       const audio = event.data.audio as Float32Array;
       if (
         !(audio instanceof Float32Array) ||
         audio.length === 0 ||
-        audio.length > 16000 * 600
+        audio.length > SAMPLE_RATE * (AUDIO_WINDOW_SECONDS + 1)
       )
         throw new Error("Invalid or oversized audio buffer.");
       send(id, { kind: "stage", stage: "Transcribing audio" });
-      const output = await asr(audio, {
-        return_timestamps: true,
-        chunk_length_s: 30,
-        stride_length_s: 5,
-        task: "transcribe",
-        ...(event.data.language === "auto"
-          ? {}
-          : { language: event.data.language }),
-      });
-      if (Array.isArray(output))
-        throw new Error("Unexpected batched transcript.");
-      const segments: Segment[] = (output.chunks || [])
-        .filter((c) => c.text.trim())
-        .map((chunk, index) => ({
-          id: index,
-          text: chunk.text.trim(),
-          start:
-            typeof chunk.timestamp[0] === "number"
-              ? Math.max(0, chunk.timestamp[0])
-              : null,
-          end:
-            typeof chunk.timestamp[1] === "number"
-              ? Math.min(event.data.duration, chunk.timestamp[1])
-              : null,
-        }));
-      if (!segments.length)
-        throw new Error(
-          "No intelligible speech was detected. Check the audio or choose another language/model.",
-        );
+      const segments: Segment[] = [];
+      const offset = Number(event.data.offset || 0);
+      const ranges = speechRanges(audio);
+      const asr = ranges.length ? await load(model, id, false) : null;
+      for (const range of ranges) {
+        if (!asr) break;
+        const part = audio.subarray(range.start, range.end);
+        const auto = event.data.language === "auto";
+        const detection = auto
+          ? await detectLanguage(asr, part)
+          : { language: event.data.language, probability: null };
+        const output = await asr(part, {
+          return_timestamps: true,
+          task: "transcribe",
+          language: detection.language,
+          chunk_length_s: 0,
+          max_new_tokens: 224,
+        });
+        if (Array.isArray(output))
+          throw new Error("Unexpected batched transcript.");
+        for (const chunk of output.chunks || []) {
+          if (!chunk.text.trim()) continue;
+          segments.push({
+            id: segments.length,
+            text: chunk.text.trim(),
+            start:
+              typeof chunk.timestamp[0] === "number"
+                ? offset +
+                  range.start / SAMPLE_RATE +
+                  Math.max(0, chunk.timestamp[0])
+                : null,
+            end:
+              typeof chunk.timestamp[1] === "number"
+                ? Math.min(
+                    event.data.duration,
+                    offset +
+                      range.start / SAMPLE_RATE +
+                      Math.min(part.length / SAMPLE_RATE, chunk.timestamp[1]),
+                  )
+                : null,
+            language: detection.language,
+            ...(detection.probability !== null
+              ? { language_probability: detection.probability }
+              : {}),
+          });
+        }
+        send(id, {
+          kind: "progress",
+          processed_seconds: offset + range.end / SAMPLE_RATE,
+          language: detection.language,
+        });
+      }
       send(id, { kind: "stage", stage: "Preparing transcript" });
-      // Whisper's auto language is used internally; this pipeline does not expose
-      // a reliable detection probability. Do not invent either that or missing times.
+      // Each segment carries its actual detected language. Global mixed-language
+      // confidence is not meaningful; keep it null instead of inventing a value.
       const result: Result = {
         segments,
         text: segments.map((s) => s.text).join("\n"),
@@ -231,16 +318,18 @@ self.onmessage = async (event: MessageEvent) => {
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     const known =
-      /cache|Install|No intelligible|Invalid or oversized|supports Tiny|browser did not retain/.test(
+      /cache|Install|No intelligible|Invalid or oversized|Choose Tiny|Language|browser did not retain/.test(
         text,
       );
     send(id, {
       kind: "error",
-      error: known
-        ? text
-        : installing
-          ? "Model installation failed. Check the connection, free browser storage and available memory. Try Tiny; no media was sent."
-          : "On-device recognition failed. Try Tiny, close memory-heavy tabs, or use the Python localhost version.",
+      error: /bad_alloc|out of memory|memory access|allocation/i.test(text)
+        ? "This model exceeded available browser memory during inference. Export completed sections and choose a smaller model, or use the native app on capable hardware."
+        : known
+          ? text
+          : installing
+            ? "Model installation failed. Check the connection, free browser storage and available memory. Try Tiny; no media was sent."
+            : "On-device recognition failed. Try Tiny, close memory-heavy tabs, or use the Python localhost version.",
     });
     console.error("ClipScribe browser worker:", text);
   } finally {

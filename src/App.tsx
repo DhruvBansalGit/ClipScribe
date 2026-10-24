@@ -46,7 +46,7 @@ const allModels: { id: Model; label: string; note: string }[] = [
   { id: "tiny", label: "Tiny", note: "Light & fast" },
   { id: "base", label: "Base", note: "Everyday balance" },
   { id: "small", label: "Small", note: "More detail" },
-  { id: "medium", label: "Medium", note: "More demanding" },
+  { id: "medium", label: "Medium", note: "High memory · experimental" },
 ];
 const models = BROWSER_MODE
   ? allModels.filter((m) => isBrowserModel(m.id))
@@ -63,6 +63,7 @@ const stages = [
 ];
 const languageNames = new Intl.DisplayNames(["en"], { type: "language" });
 const languageName = (code: string) => {
+  if (code === "mul") return "Mixed languages";
   try {
     return languageNames.of(code) || code;
   } catch {
@@ -322,7 +323,11 @@ export default function App() {
       setError("This file is empty. Choose a video containing speech.");
       return;
     }
-    if (config && candidate.size > config.max_bytes) {
+    if (
+      config &&
+      config.max_bytes !== null &&
+      candidate.size > config.max_bytes
+    ) {
       setError(`Choose a file smaller than ${bytes(config.max_bytes)}.`);
       return;
     }
@@ -370,8 +375,8 @@ export default function App() {
         await browserEngine.start(file, settings, (next) => {
           setJob(next);
           if (next.duration) setDuration(next.duration);
+          if (next.result) setSegments(next.result.segments);
           if (next.status === "completed" && next.result) {
-            setSegments(next.result.segments);
             setToast("Transcript ready. Recognized entirely on this device.");
           }
           if (next.status === "failed")
@@ -783,7 +788,9 @@ export default function App() {
                   <span className="file-guidance">
                     MP4, MOV, WebM, MKV & more <span>·</span>{" "}
                     {config
-                      ? `Up to ${bytes(config.max_bytes)}`
+                      ? config.max_bytes === null
+                        ? "No fixed size or duration cap"
+                        : `Up to ${bytes(config.max_bytes)}`
                       : "Size limit shown when engine connects"}
                   </span>
                 </div>
@@ -1044,7 +1051,11 @@ export default function App() {
                             preference("language", e.target.value)
                           }
                         >
-                          <option value="auto">Detect automatically</option>
+                          <option value="auto">
+                            {BROWSER_MODE
+                              ? "Auto · mixed languages (re-detect speech)"
+                              : "Detect automatically"}
+                          </option>
                           {config?.languages.map((l) => (
                             <option key={l} value={l}>
                               {languageName(l)}
@@ -1054,6 +1065,8 @@ export default function App() {
                         <p className="setup-note">
                           Speech stays in its original language. Accuracy varies
                           with audio quality, language and model size.
+                          {BROWSER_MODE &&
+                            " Auto re-detects language in short speech sections. Rapid within-sentence switches may still need corrections."}
                         </p>
                         {busy ? (
                           <button
@@ -1078,7 +1091,10 @@ export default function App() {
                           >
                             {segments.length ? (
                               <>
-                                <CheckCheck size={17} /> Transcription complete
+                                <CheckCheck size={17} />{" "}
+                                {job?.result?.partial
+                                  ? "Partial transcript retained"
+                                  : "Transcription complete"}
                               </>
                             ) : modelState?.status === "installed" ? (
                               <>
@@ -1113,7 +1129,11 @@ export default function App() {
                         <FileText size={17} /> Transcript{" "}
                         {segments.length > 0 && (
                           <span className="edited-badge">
-                            {edited ? "EDITED" : "READY"}
+                            {edited
+                              ? "EDITED"
+                              : job?.result?.partial
+                                ? "PARTIAL"
+                                : "READY"}
                           </span>
                         )}
                       </span>
@@ -1127,6 +1147,13 @@ export default function App() {
                     </div>
                     {segments.length > 0 ? (
                       <>
+                        {BROWSER_MODE && job?.result?.partial && (
+                          <p className="preview-note" role="status">
+                            {busy
+                              ? `${job.stage} · processed ${clock(job.processed_seconds || 0)} / ${clock(duration)}. Completed sections can be downloaded now; editing unlocks when processing stops.`
+                              : "Partial transcript preserved. Download completed sections before starting another job."}
+                          </p>
+                        )}
                         {segments.some(
                           (s) => s.start === null || s.end === null,
                         ) && (
@@ -1210,6 +1237,13 @@ export default function App() {
                                 </button>
                                 <textarea
                                   aria-label={`Segment ${s.id + 1}`}
+                                  readOnly={busy}
+                                  lang={s.language}
+                                  title={
+                                    s.language
+                                      ? `Recognized language: ${languageName(s.language)}`
+                                      : undefined
+                                  }
                                   rows={Math.max(
                                     2,
                                     Math.ceil(s.text.length / 55),
@@ -1272,7 +1306,9 @@ export default function App() {
                                 preference("format", e.target.value as Format)
                               }
                             >
-                              <option value="txt">Plain text (.txt)</option>
+                              <option value="txt">
+                                Timestamped text (.txt)
+                              </option>
                               <option value="srt">SubRip (.srt)</option>
                               <option value="vtt">WebVTT (.vtt)</option>
                               <option value="json">Structured JSON</option>
@@ -1498,7 +1534,7 @@ export default function App() {
                   <h3>Install once. Transcribe locally.</h3>
                   <p>
                     {BROWSER_MODE
-                      ? "In Settings, consent to downloading a Tiny or Base ONNX Whisper model. The weights are stored in this browser on your computer, not installed as a Python application. No account, API key or local server is needed. A browser may evict stored files; a new browser or private session may need another download."
+                      ? "In Settings, choose Tiny, Base, Small or Medium and consent to downloading ONNX Whisper. Weights stay in browser storage, not a Python installation. Large videos are processed in bounded audio windows with no fixed app size/duration cap. Device memory, storage and codec limits still apply."
                       : "Start FastAPI and Vite as described in the README. In Settings, install a Whisper model. Only this installation contacts the model host. Cached models work without an internet connection."}
                   </p>
                 </div>
@@ -1531,9 +1567,11 @@ export default function App() {
                   <p>
                     <strong>In this browser · ONNX Whisper</strong>
                     <br />
-                    Tiny and Base run on your computer using WebAssembly. No
-                    Python server is required. Browser limit: 100 MB and 10
-                    minutes. Use the{" "}
+                    All four Whisper sizes run on your device using WebAssembly.
+                    No fixed file-size or recording-duration cap: audio is
+                    processed in bounded windows. Small and Medium need
+                    substantially more memory, storage and time; device/browser
+                    limits still apply. The{" "}
                     <a
                       href="https://github.com/DhruvBansalGit/ClipScribe"
                       target="_blank"
@@ -1541,7 +1579,10 @@ export default function App() {
                     >
                       Python localhost version
                     </a>{" "}
-                    for larger files/models.
+                    remains an alternative if your browser runs out of
+                    resources.
+                    {settings.model === "medium" &&
+                      " Medium is experimental in this browser runtime: inference exhausted memory on our 8 GB test machine even after a successful download. Small is the safer high-quality option."}
                   </p>
                 </div>
               )}
@@ -1671,7 +1712,11 @@ export default function App() {
                     value={settings.language}
                     onChange={(e) => preference("language", e.target.value)}
                   >
-                    <option value="auto">Detect automatically</option>
+                    <option value="auto">
+                      {BROWSER_MODE
+                        ? "Auto · mixed languages (re-detect speech)"
+                        : "Detect automatically"}
+                    </option>
                     {config?.languages.map((l) => (
                       <option key={l} value={l}>
                         {languageName(l)}
@@ -1705,7 +1750,7 @@ export default function App() {
                 <Cpu size={18} />
                 <p>
                   {BROWSER_MODE
-                    ? "Tiny is the lightest choice. Base can improve recognition but needs more memory and time. Keep this tab open while processing. Limited-memory phones may not support these models reliably. Recognition is not perfect; review your transcript."
+                    ? "Tiny is lightest. Small downloads about 249 MB of weights; Medium about 776 MB, plus runtime/config files, and needs much more working memory. Download size is not RAM usage. On-device loading can fail on low-memory computers/phones. Keep this tab open; choose a smaller model if needed. Auto re-detects language per speech section, but rapid code-switching and native-script accuracy still need review."
                     : "Start with Base on CPU. Try Tiny for less memory and faster results. CUDA requires a supported NVIDIA GPU plus compatible CUDA/cuDNN libraries. Apple Metal is not supported."}
                 </p>
               </div>

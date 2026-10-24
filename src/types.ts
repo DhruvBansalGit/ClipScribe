@@ -5,6 +5,8 @@ export type Segment = {
   start: number | null;
   end: number | null;
   text: string;
+  language?: string;
+  language_probability?: number;
 };
 export type Settings = {
   model: Model;
@@ -15,8 +17,8 @@ export type Settings = {
 };
 export type Config = {
   token: string;
-  max_bytes: number;
-  max_duration: number;
+  max_bytes: number | null;
+  max_duration: number | null;
   ffmpeg: boolean;
   speech_dependencies: boolean;
   cuda: boolean;
@@ -40,6 +42,7 @@ export type Result = {
   duration: number;
   model: Model;
   text: string;
+  partial?: boolean;
 };
 export type Job = {
   id: string;

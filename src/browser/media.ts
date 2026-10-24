@@ -1,16 +1,13 @@
 import { FFmpeg, FFFSType } from "@ffmpeg/ffmpeg";
 import classWorkerURL from "./ffmpeg.worker?worker&url";
-import {
-  MEDIA_CACHE,
-  RUNTIME_ROOT,
-  MAX_BROWSER_BYTES,
-  MAX_BROWSER_SECONDS,
-} from "./registry";
+import { MEDIA_CACHE, RUNTIME_ROOT, AUDIO_WINDOW_SECONDS } from "./registry";
 
 export class LocalMedia {
   private ffmpeg = new FFmpeg();
   private urls: string[] = [];
   private disposed = false;
+  private input = "";
+  private duration = 0;
   async load(download: boolean, signal: AbortSignal) {
     const cache = await caches.open(MEDIA_CACHE);
     const get = async (name: string, type: string) => {
@@ -65,15 +62,12 @@ export class LocalMedia {
       );
     }
   }
-  async extract(
+  async prepare(
     file: File,
     signal: AbortSignal,
     onStage: (stage: string) => void,
   ) {
-    if (!file.size || file.size > MAX_BROWSER_BYTES)
-      throw new Error(
-        "Choose a non-empty video no larger than 100 MB for browser mode.",
-      );
+    if (!file.size) throw new Error("Choose a non-empty video.");
     onStage("Preparing video");
     await this.load(false, signal);
     await this.ffmpeg.createDir("/input");
@@ -81,6 +75,7 @@ export class LocalMedia {
     // entire large video into frontend JavaScript or WASM memory.
     await this.ffmpeg.mount(FFFSType.WORKERFS, { files: [file] }, "/input");
     const input = "/input/" + file.name;
+    this.input = input;
     const safe = [
       "-protocol_whitelist",
       "file,pipe",
@@ -100,7 +95,7 @@ export class LocalMedia {
         "/metadata.json",
         input,
       ],
-      30000,
+      120000,
     );
     // This pinned ffprobe WASM build reports -1 after successful cleanup.
     // Accept it only with complete, parseable metadata; never infer success from -1.
@@ -133,26 +128,40 @@ export class LocalMedia {
         "This video has no audio stream. Choose a video containing speech.",
       );
     const duration = Number(metadata.format?.duration);
-    if (
-      !Number.isFinite(duration) ||
-      duration <= 0 ||
-      duration > MAX_BROWSER_SECONDS
-    )
+    if (!Number.isFinite(duration) || duration <= 0)
       throw new Error(
-        "Browser mode supports videos up to 10 minutes with readable duration. Use the Python app for longer files.",
+        "This video has no readable finite duration. Try re-exporting it as MP4.",
       );
+    this.duration = duration;
+    return duration;
+  }
+  async extractWindow(start: number, signal: AbortSignal) {
+    if (!this.input || start < 0 || start >= this.duration)
+      throw new Error("Invalid source-video audio window.");
     if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
-    onStage("Extracting audio");
+    const windowDuration = Math.min(
+      AUDIO_WINDOW_SECONDS,
+      this.duration - start,
+    );
+    const safe = [
+      "-protocol_whitelist",
+      "file,pipe",
+      "-format_whitelist",
+      "mov,matroska,webm,avi,mpeg,mpegts,asf,flv,ogg",
+    ];
     const status = await this.ffmpeg.exec(
       [
         "-nostdin",
         "-v",
         "error",
         ...safe,
-        "-copyts",
-        "-start_at_zero",
+        // Input seeking keeps decode bounded. Default FFmpeg timestamp
+        // normalization yields window-relative samples; offsets are added once
+        // to real model timestamps in the ASR worker, on the original timeline.
+        "-ss",
+        String(start),
         "-i",
-        input,
+        this.input,
         "-map",
         "0:a:0",
         "-vn",
@@ -163,29 +172,30 @@ export class LocalMedia {
         "-ar",
         "16000",
         "-t",
-        String(MAX_BROWSER_SECONDS),
+        String(windowDuration),
         "-c:a",
         "pcm_s16le",
         "-y",
         "/audio.wav",
       ],
-      120000,
+      300000,
     );
     if (status !== 0)
       throw new Error(
-        "Audio extraction failed or took too long. Try a shorter MP4 with AAC audio.",
+        "An audio window could not be decoded. Export the completed transcript, then try re-encoding the video as MP4/AAC.",
       );
     const wav = await this.ffmpeg.readFile("/audio.wav");
     if (typeof wav === "string")
       throw new Error("Audio extraction returned an invalid buffer.");
     const audio = readPCM(wav);
-    let energy = 0;
-    for (let i = 0; i < audio.length; i++) energy += audio[i] * audio[i];
-    if (!audio.length || Math.sqrt(energy / audio.length) < 0.0001)
-      throw new Error(
-        "No audible speech signal was found. Check the video volume or choose another file.",
-      );
-    return { audio, duration };
+    await this.ffmpeg.deleteFile("/audio.wav");
+    // Bounded PCM output is essential: never accumulate decoded whole videos.
+    if (audio.length > 16000 * (AUDIO_WINDOW_SECONDS + 1))
+      throw new Error("Audio decoder exceeded the processing-window bound.");
+    return {
+      audio: audio.subarray(0, Math.ceil(windowDuration * 16000)),
+      duration: windowDuration,
+    };
   }
   dispose() {
     this.disposed = true;

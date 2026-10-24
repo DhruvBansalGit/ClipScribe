@@ -9,18 +9,36 @@ No paid transcription API, cloud credentials, accounts, database, Firebase, Supa
 ## Use the hosted website — no Python required
 
 1. Open **https://clipscribe-flax.vercel.app** in a current desktop Chrome or Edge browser.
-2. Open **Prepare this device** / **Settings**. Choose Tiny (lightest) or Base (default).
+2. Open **Prepare this device** / **Settings**. Choose Tiny (lightest), Base (default), Small or Medium. Small/Medium need substantially more memory and time.
 3. Check the download-consent box and click **Download to this device**. Public ONNX model files come from Hugging Face; audio/inference runtime files come from this website. The first preparation needs internet and available disk space/memory. There is no media upload.
 4. Wait for **Cached in this browser**, select your local video and click **Transcribe video**.
 5. Review/edit, click timestamps, and download TXT/SRT/VTT/JSON. Download before closing the tab.
 
 ### What “download to your PC” means
 
-The model is saved in this website's **browser Cache Storage** on the visitor's device, not in their Downloads folder or as a system Python installation. Browsers cannot silently install desktop software. Model download requires explicit consent. Future visits to the same browser/profile/site reuse the cached model. Clearing site data, private browsing, switching browsers/domains or browser storage eviction may require downloading again. **Remove Tiny/Base from this browser** deletes that model's cached weights.
+The model is saved in this website's **browser Cache Storage** on the visitor's device, not in their Downloads folder or as a system Python installation. Browsers cannot silently install desktop software. Model download requires explicit consent. Future visits to the same browser/profile/site reuse the cached model. Clearing site data, private browsing, switching browsers/domains or browser storage eviction may require downloading again. **Remove [model] from this browser** deletes that model's cached weights.
 
 Vercel serves the page and JavaScript/WASM runtime. Hugging Face and its CDN receive ordinary public model-download requests (and usual IP/request metadata) only during installation. Neither receives the selected video, audio, transcript or filename. FFmpeg WASM mounts the chosen File with read-only WORKERFS slices and extracts 16 kHz mono audio locally; a separate worker runs quantized Whisper through ONNX Runtime Web. Cancelling terminates workers and releases processing buffers. Videos/audio/transcripts are never persisted in Cache Storage or localStorage.
 
-Hosted limits: **100 MiB per video, 10 minutes, one job at a time**. Tiny and Base use CPU WebAssembly Q8. Small/Medium/CUDA are intentionally not exposed in hosted mode; use the native app below for those. These pinned multilingual model revisions contain 99 language codes. Automatic language detection is used internally, but this browser pipeline does not expose a reliable detected-language label/probability; the UI says original language/auto rather than inventing one. Missing timestamps are kept as null in JSON and block subtitle export; TXT remains available.
+### Large videos, four models, mixed languages and timestamped TXT
+
+**The website no longer imposes the old 100 MiB / 10-minute cap.** A selected video is mounted read-only and decoded sequentially into **30-second PCM windows**. Only the current window is transferred to the recognition worker; the whole video/audio is not accumulated in RAM. Completed sections appear progressively and can be downloaded. On cancellation/failure they remain explicitly marked **PARTIAL**, not complete. Text editing unlocks when processing stops. Keep the tab open; there is no resume-across-reload mechanism.
+
+This is not unlimited hardware capacity: container/codec support, WebAssembly address limits, free memory, CPU speed, disk/cache quota and browser tab suspension still matter. A per-window stall watchdog remains; there is no whole-recording duration timeout. Very large files or memory-heavy models may still fail, in which case export completed sections and use a smaller model or the native application. One job runs at a time. Native Python upload/duration limits are separately configurable and were not removed by this website change.
+
+All four **multilingual** Whisper models use Q8 CPU WebAssembly. Pinned Small weights total about **249 MB**, Medium about **776 MB**, excluding runtime/config files. Working RAM is substantially greater than download size; Medium is not suitable for every computer. No CUDA/WebGPU switch is exposed.
+
+Choose **Auto · mixed languages (re-detect speech)** for Hindi/English or other language changes. The previous library path silently defaulted to English when no language was provided. ClipScribe now scores Whisper's first language token explicitly, independently for each silence-delimited speech section (continuous speech is split into short windows), then sets `task=transcribe` with that detected language. It does not request translation. JSON includes per-segment language codes and language-token probabilities, which are model estimates, not calibrated accuracy guarantees. Multiple detected languages are labelled **Mixed languages**. A manually selected language intentionally locks all sections to that language.
+
+Rapid switching within the same short sentence can still be mistranscribed, translated or transliterated by Whisper, especially Tiny/Base. Native-script correctness is not guaranteed merely because language detection is correct. Review the result and try Small/Medium for difficult audio. No fabricated transliteration, hardcoded translations or mock text are added to the transcript.
+
+**TXT downloads now contain timestamps**, for example:
+
+```text
+[00:01:12.340 --> 00:01:16.780] Your edited transcript text.
+```
+
+These are real model timestamps shifted to the original video timeline, including positions past one hour. Missing model times are printed as `unknown` in TXT and retained as null in JSON; SRT/VTT refuses incomplete timing instead of inventing it. Clipboard copy remains text-only. Recognition and export limitations are recorded in [TESTING.md](TESTING.md).
 
 On-device Tiny **and Base** were tested with real human speech at the public URL. Prepared app-shell reload and fresh-worker recognition passed with browser networking disabled. This does not make a fresh visitor offline-ready: dependencies/model assets must finish downloading first. Storage eviction, browser updates and new site releases can require connectivity. Low-memory phones may fail even with Tiny; desktop Chrome/Edge is recommended. Other browsers and long recordings remain unverified. Model accuracy is not guaranteed.
 

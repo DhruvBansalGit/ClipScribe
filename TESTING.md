@@ -1,5 +1,38 @@
 # Verification report — native 2026-10-23 / hosted browser 2026-10-24
 
+## Large-video / four-model / multilingual revision — 2026-10-24
+
+The original 100 MiB / 10-minute browser limits are removed. Streaming here means read-only source File slices plus bounded 30-second decoded PCM windows, not loading whole media into RAM. A 20-minute per-operation watchdog remains for stalls; it is not a recording-length cap. There is no cross-reload resume.
+
+Public deployment verification: the final build at **https://clipscribe-flax.vercel.app** passed the 115.6 MB/620-second Tiny workflow and Small's mixed real-English/synthesized-Hindi workflow, with actual model download/inference, source-timeline JSON, timestamped TXT and no media-upload/external-inference requests. The Small quality check required recognizable Hindi words (`मौसम`, `बारिश` or `शहर`), not simply a language label. Four model choices, Medium's experimental warning, explicit download consent and 390 px settings layout passed without page errors. Final deployment: `clipscribe-qs7sjh5la-dhruv-820e.vercel.app`, aliased to the public URL. No billing changes or cloud inference were introduced.
+
+Local optimized-build verification:
+- **115,633,890-byte, 620-second valid MP4** completed real Tiny inference, including speech after 605 seconds. Its large size includes an inert MP4 `free` box, and much of its duration is silence between two genuine JFK speech clips. This proves both former limits are crossed and the late timeline is correct; it is not a benchmark for 115 MB of high-bitrate footage or multi-hour continuous speech.
+- Separate extraction inspection confirmed a 30-second output bound, silence at 30 seconds and correct leading silence/speech placement in the 600-second window.
+- Cancelling after a completed real window retains editable/exportable text and JSON `partial:true`; it is not presented as a full transcript.
+- **Small** downloaded/loaded and completed real inference. A mixed fixture combining real English JFK audio and macOS Lekha synthesized Hindi produced English plus recognizable Devanagari Hindi, with detected `en`/`hi` segment metadata and source-video timestamps. The Hindi fixture is explicitly synthesized speech, not a claim of human-Hindi quality validation.
+- A separate **human Hindi** sample from Google FLEURS (`hi_in` test, `10011266027513218401.wav`, CC-BY-4.0) was identified as Hindi, but Tiny/Small produced repetitive/inaccurate wording; Base sometimes produced Urdu/transliterated output. **Correct language detection is not proof of transcription accuracy or guaranteed native-script output.** These failures are retained as limitations, not counted as successful Hindi-quality tests.
+- Medium's initial load succeeded but inference hit `std::bad_alloc` on this 8 GB machine. Disabling memory arena/pattern retention did not make inference succeed on this host. The explicit memory error and recovery guidance were verified. Medium is marked high-memory/experimental; do not confuse a successful download/load with successful inference.
+- **18 frontend unit tests** pass, covering timestamped TXT (Unicode/hour-scale/unknown times), subtitle validity, bounded speech ranges and language-token argmax. Native regression: **18 backend tests / 3 real-model browser workflows** passed. Clean `npm ci`, production build and npm audit pass (0 reported vulnerabilities).
+
+Critical correction to the earlier report: the earlier English-only hosted tests did **not** validate multilingual automatic detection. Source inspection found Transformers.js 4.3.1 explicitly defaults to English when no language is supplied. The revision implements a first-token language-logit check independently for each silence-delimited speech range, splitting continuous speech into short ranges, and then explicitly selects `task=transcribe`. It does not claim word-by-word code-switch detection or perfect translations avoidance by the model. Manually selecting a language intentionally locks it.
+
+TXT now contains `[HH:MM:SS.mmm --> HH:MM:SS.mmm] text`, preserving edited Unicode text. Unknown timestamps remain `unknown`/null rather than fabricated. SRT/VTT still require complete model timing. Tests use actual models; no fixture text is injected into recognition.
+
+Reproduction on macOS after preparing the README JFK fixture:
+
+```sh
+python tests/prepare-revision-fixtures.py
+MODEL=small FIXTURE=.local/mixed.mp4 node tests/revision-models.mjs
+MODEL=tiny FIXTURE=.local/long-large.mp4 node tests/revision-models.mjs
+# Medium may fail on constrained hardware; that is a real failure, not skipped:
+MODEL=medium FIXTURE=.local/real-speech.mp4 node tests/revision-models.mjs
+```
+
+Use `CLIPSCRIBE_BROWSER_URL=https://clipscribe-flax.vercel.app` for the actual public site. `.local/mixed.mp4` deliberately includes synthesized Hindi; `.local/mixed-human.mp4` is the separate difficult human-speech negative-quality case. The regression requires meaningful expected Hindi words, not merely a Hindi language label or arbitrary Devanagari characters. An earlier structural-only check was strengthened after it incorrectly accepted repetitive model output.
+
+Earlier hosted verification below is historical and describes the prior two-model capped release; current behavior is documented above and in README.
+
 ## Hosted browser mode — verified on the real public Vercel URL
 
 Public site: **https://clipscribe-flax.vercel.app**. Static-only deployment to the existing Hobby account after explicit owner confirmation of personal/non-commercial use. No billing or plan changes. Unauthenticated HTTP/browser access to the production alias succeeded; preview protection remains a separate Vercel setting.

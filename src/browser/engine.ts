@@ -1,10 +1,9 @@
-import type { Config, Job, Model, Settings, Result } from "../types";
+import type { Config, Job, Model, Settings, Result, Segment } from "../types";
 import {
   BROWSER_MODELS,
   MODEL_CACHE_PREFIX,
   MEDIA_CACHE,
-  MAX_BROWSER_BYTES,
-  MAX_BROWSER_SECONDS,
+  AUDIO_WINDOW_SECONDS,
   LANGUAGES,
   EXTENSIONS,
   isBrowserModel,
@@ -23,6 +22,8 @@ type WorkerEvent = {
   file?: string;
   loaded?: number;
   total?: number;
+  processed_seconds?: number;
+  language?: string;
 };
 
 class BrowserEngine {
@@ -46,7 +47,7 @@ class BrowserEngine {
   }
   async config(): Promise<Config> {
     const models = {} as Config["models"];
-    for (const model of ["tiny", "base"] as BrowserModel[]) {
+    for (const model of Object.keys(BROWSER_MODELS) as BrowserModel[]) {
       const cached = await modelInstalled(model);
       models[model] =
         this.state[model]?.status === "downloading"
@@ -57,12 +58,10 @@ class BrowserEngine {
       if (models[model].status === "installed" && !cached)
         models[model] = { status: "not_installed" };
     }
-    models.small = { status: "unavailable" };
-    models.medium = { status: "unavailable" };
     return {
       token: "",
-      max_bytes: MAX_BROWSER_BYTES,
-      max_duration: MAX_BROWSER_SECONDS,
+      max_bytes: null,
+      max_duration: null,
       ffmpeg: true,
       speech_dependencies:
         typeof WebAssembly !== "undefined" &&
@@ -88,10 +87,13 @@ class BrowserEngine {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
         () => {
+          this.pending = null;
+          worker.onmessage = null;
+          worker.onerror = null;
           this.stopWorker();
           reject(
             new Error(
-              "The browser operation exceeded 20 minutes. Try Tiny or a shorter video.",
+              "This model operation stalled for 20 minutes. Completed windows are preserved; try a smaller model or another browser. This is a per-window watchdog, not a recording-duration limit.",
             ),
           );
         },
@@ -135,7 +137,7 @@ class BrowserEngine {
   }
   async install(model: Model) {
     if (!isBrowserModel(model))
-      throw new Error("Choose Tiny or Base for browser mode.");
+      throw new Error("Choose Tiny, Base, Small or Medium.");
     if (this.operation)
       throw new Error("Wait for the current browser operation or cancel it.");
     this.operation = "install";
@@ -212,7 +214,7 @@ class BrowserEngine {
     if (this.operation)
       throw new Error("Another browser operation is running.");
     if (!isBrowserModel(settings.model))
-      throw new Error("Choose Tiny or Base for browser mode.");
+      throw new Error("Choose Tiny, Base, Small or Medium.");
     this.operation = "transcribe";
     this.abort = new AbortController();
     this.job = {
@@ -227,40 +229,80 @@ class BrowserEngine {
       onUpdate({ ...this.job });
     };
     update({});
+    const segments: Segment[] = [];
+    let duration = 0;
+    const snapshot = (partial: boolean): Result => {
+      const languages = new Set(
+        segments.map((s) => s.language).filter(Boolean),
+      );
+      return {
+        segments: [...segments],
+        text: segments.map((s) => s.text).join("\n"),
+        model: settings.model,
+        duration,
+        language:
+          languages.size > 1
+            ? "mul"
+            : languages.size === 1
+              ? [...languages][0]!
+              : null,
+        language_probability: null,
+        partial,
+      };
+    };
     try {
       if (!(await modelInstalled(settings.model)))
         throw new Error(
           "Install the model before transcribing. The browser may have cleared its cache.",
         );
       this.media = new LocalMedia();
-      const { audio, duration } = await this.media.extract(
-        file,
-        this.abort.signal,
-        (stage) => update({ stage }),
+      duration = await this.media.prepare(file, this.abort.signal, (stage) =>
+        update({ stage }),
       );
-      this.media.dispose();
-      this.media = null;
       if (this.abort.signal.aborted)
         throw new DOMException("Cancelled", "AbortError");
       update({ duration });
-      const event = await this.request(
-        {
-          kind: "transcribe",
-          model: settings.model,
-          language: settings.language,
-          audio,
-          duration,
-        },
-        (event) => {
-          if (event.kind === "stage") update({ stage: event.stage! });
-        },
-        [audio.buffer],
-      );
-      if (!event.result) throw new Error("The browser returned no transcript.");
+      for (let offset = 0; offset < duration; offset += AUDIO_WINDOW_SECONDS) {
+        if (this.abort.signal.aborted)
+          throw new DOMException("Cancelled", "AbortError");
+        update({ stage: "Extracting audio" });
+        const { audio } = await this.media.extractWindow(
+          offset,
+          this.abort.signal,
+        );
+        const event = await this.request(
+          {
+            kind: "transcribe",
+            model: settings.model,
+            language: settings.language,
+            audio,
+            duration,
+            offset,
+          },
+          (event) => {
+            if (event.kind === "stage") update({ stage: event.stage! });
+            if (event.processed_seconds !== undefined)
+              update({ processed_seconds: event.processed_seconds });
+          },
+          [audio.buffer],
+        );
+        if (!event.result)
+          throw new Error("The browser returned no window result.");
+        for (const segment of event.result.segments)
+          segments.push({ ...segment, id: segments.length });
+        update({
+          result: snapshot(true),
+          processed_seconds: Math.min(duration, offset + AUDIO_WINDOW_SECONDS),
+        });
+      }
+      if (!segments.length)
+        throw new Error(
+          "No intelligible speech was detected. Check the audio or choose another model.",
+        );
       update({
         status: "completed",
         stage: "Completed",
-        result: event.result,
+        result: snapshot(false),
         media_deleted: true,
       });
     } catch (error) {

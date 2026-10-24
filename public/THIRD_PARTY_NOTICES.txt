@@ -33,6 +33,8 @@ These are free local models, not the OpenAI API. The website never requests an O
 Models are downloaded only after consent directly from Hugging Face:
 https://huggingface.co/Xenova/whisper-tiny/tree/5332fcc35e32a33b86612b9a57a89be7906102b1
 https://huggingface.co/Xenova/whisper-base/tree/64da57285918e20ea79ea5c88eed7197933abaa8
+https://huggingface.co/Xenova/whisper-small/tree/2d67713f236afa48a18992566e7647f6ca848e13
+https://huggingface.co/Xenova/whisper-medium/tree/8c5b90880ab9f79487ab33613413431bf661d595
 Original source/license: https://github.com/openai/whisper/blob/main/LICENSE
 
 React / React DOM — MIT: https://github.com/facebook/react

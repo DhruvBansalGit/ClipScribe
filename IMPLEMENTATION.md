@@ -26,8 +26,9 @@ Model installation is an explicit separate network-enabled action. Transcription
 ## Hosted browser mode (requested follow-up)
 - Public site: https://clipscribe-flax.vercel.app. Only static assets are sent to Vercel using scripts/stage-vercel.mjs. The Python backend remains local and is not deployed.
 - User explicitly confirmed personal/non-commercial Hobby use; no billing/plan changes.
-- Transformers.js 4.3.1, pinned Xenova Tiny/Base ONNX revisions, CPU Q8 WebAssembly, self-hosted FFmpeg/ONNX runtimes, browser Cache Storage and app-shell service worker.
+- Transformers.js 4.3.1, pinned Xenova Tiny/Base/Small/Medium ONNX revisions, CPU Q8 WebAssembly, self-hosted FFmpeg/ONNX runtimes, browser Cache Storage and app-shell service worker. Medium is explicitly high-memory/experimental: its initial load passed but inference exhausted memory on the 8 GB test host.
 - Explicit download consent, actual per-file byte progress, cache completion/eviction checks and model removal. Models are stored in browser-managed site storage, not installed system-wide.
-- Read-only WORKERFS mounts selected video; workers extract/transcribe locally. Browser limit 100 MiB / 600 seconds. Cancellation terminates workers, with no uploaded or persisted user media.
+- Per user revision, remove the 100 MiB / 600-second cap. WORKERFS mounts source slices and FFmpeg decodes sequential 30-second windows, with source-timeline offsets. Completed partial windows survive cancellation/failure for download. Device/browser limits remain; no whole-recording timeout or unlimited-hardware claim.
+- Auto language now uses Whisper's first-language-token logits per short speech range, rather than the library's missing-language English fallback. Always transcribe, not translate. JSON carries detected segment languages; TXT includes actual timestamp ranges. Real English + explicitly synthetic Hindi succeeded with Small; separate human-Hindi accuracy was poor and is documented, not disguised as a pass.
 - Hosted Tiny and Base passed real human-speech recognition, edited exports, playback synchronization, cache reuse, offline reload/inference, cancellation and corrupt-media checks. Base removal was verified. See TESTING.md.
 - CLI deployment only; GitHub source publishing does not automatically trigger Vercel. Runtime notices and upstream source are exposed through the footer.

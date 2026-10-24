@@ -17,7 +17,9 @@ describe("actual timestamp-based transcript operations", () => {
     ];
     expect(activeSegment(unknown, 1)).toBeNull();
     expect(clock(null)).toBe("--:--");
-    expect(exportText("txt", unknown)).toBe("Real recognized words");
+    expect(exportText("txt", unknown)).toBe(
+      "[00:00:00.000 --> unknown] Real recognized words\n",
+    );
     expect(JSON.parse(exportText("json", unknown)).segments[0].end).toBeNull();
     expect(() => exportText("srt", unknown)).toThrow(/not be invented/);
     expect(() => exportText("vtt", unknown)).toThrow(/not be invented/);
@@ -49,7 +51,7 @@ describe("actual timestamp-based transcript operations", () => {
   it("exports current edited text", () => {
     expect(fullText(segments)).toContain("An edited sentence.");
     expect(exportText("txt", segments)).toBe(
-      "First sentence.\nAn edited sentence.",
+      "[00:00:00.125 --> 00:00:03.900] First sentence.\n\n[00:00:05.001 --> 00:00:08.210] An edited sentence.\n",
     );
   });
   it("exports valid SRT sequence and separator", () => {
@@ -64,6 +66,13 @@ describe("actual timestamp-based transcript operations", () => {
   });
   it("exports structured editable JSON", () => {
     expect(JSON.parse(exportText("json", segments)).segments).toEqual(segments);
+  });
+  it("preserves Unicode and hour-scale source times in TXT", () => {
+    expect(
+      exportText("txt", [
+        { id: 0, start: 3661.002, end: 3663.25, text: "नमस्ते — Hello" },
+      ]),
+    ).toBe("[01:01:01.002 --> 01:01:03.250] नमस्ते — Hello\n");
   });
   it("escapes VTT markup and blank subtitle lines", () => {
     expect(
